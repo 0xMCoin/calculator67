@@ -1,7 +1,7 @@
 // Exporta e importa os dados em CSV — abre direto no Excel e no Google Sheets.
 // Separador ";" e vírgula decimal, que é o padrão do Excel em português.
 
-import type { TipoDocumento } from "./boleto";
+import type { TipoDocumento } from "./boleto.ts";
 import {
   ESTADO_INICIAL,
   ROTULOS_DIVISAO,
@@ -11,8 +11,8 @@ import {
   type Divisao,
   type Estado,
   type ResultadoMes,
-} from "./calculo";
-import type { AnexoId } from "./simples";
+} from "./calculo.ts";
+import type { AnexoId } from "./simples.ts";
 
 const CABECALHO_CONTAS = "Descrição;Categoria;Valor;Vencimento;Quem paga;Linha digitável";
 const CABECALHO_SOCIOS = "Sócio;Faturamento;Pró-labore;Dependentes;Quotas %;IRRF manual";

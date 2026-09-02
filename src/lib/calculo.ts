@@ -1,6 +1,6 @@
-import type { ItemComposicao, TipoDocumento } from "./boleto";
-import { calcularIRRF, type ResultadoIRRF } from "./irrf";
-import { calcularDAS, inssProLabore, type AnexoId, type ResultadoDAS } from "./simples";
+import type { ItemComposicao, TipoDocumento } from "./boleto.ts";
+import { calcularIRRF, type ResultadoIRRF } from "./irrf.ts";
+import { calcularDAS, inssProLabore, type AnexoId, type ResultadoDAS } from "./simples.ts";
 
 export type Divisao = "proporcional" | "igual" | "quotas" | "socio1" | "socio2";
 
