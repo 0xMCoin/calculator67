@@ -218,8 +218,11 @@ export function Linha({
   );
 }
 
-/** Estado persistido no navegador (nada sai do dispositivo). */
-export function useEstadoLocal<T>(chave: string, inicial: T) {
+/**
+ * Estado persistido no navegador (nada sai do dispositivo).
+ * `migrar` completa campos novos em dados salvos por versões antigas.
+ */
+export function useEstadoLocal<T>(chave: string, inicial: T, migrar: (v: T) => T = (v) => v) {
   const [valor, setValor] = useState<T>(inicial);
   const [carregado, setCarregado] = useState(false);
 
@@ -229,7 +232,7 @@ export function useEstadoLocal<T>(chave: string, inicial: T) {
   useEffect(() => {
     try {
       const salvo = window.localStorage.getItem(chave);
-      if (salvo) setValor({ ...inicial, ...(JSON.parse(salvo) as T) });
+      if (salvo) setValor(migrar({ ...inicial, ...(JSON.parse(salvo) as T) }));
     } catch {
       /* ignora storage indisponível */
     }

@@ -125,5 +125,94 @@ const comFolha = calcularDAS({ receitaMes: 100_000, rbt12: 1_000_000, anexo: "II
 checar("Fator R 10% → Anexo V", semFolha.anexoAplicado, "V");
 checar("Fator R 30% → Anexo III", comFolha.anexoAplicado, "III");
 
+// --- Pró-labore: INSS, IRRF e líquido ---
+import { inssProLabore } from "../src/lib/simples.ts";
+import { calcularIRRF, ISENCAO_INTEGRAL } from "../src/lib/irrf.ts";
+
+checar("INSS de 11% sobre R$ 3.242", Number(inssProLabore(3242, 8157.41).toFixed(2)), 356.62);
+checar(
+  "INSS limitado ao teto",
+  Number(inssProLabore(20_000, 8157.41).toFixed(2)),
+  Number((8157.41 * 0.11).toFixed(2))
+);
+checar("IRRF isento até a faixa da reforma", calcularIRRF(ISENCAO_INTEGRAL, 550).irrf, 0);
+checar("IRRF de quem ganha pouco", calcularIRRF(3242, 356.62).irrf, 0);
+const irrfAlto = calcularIRRF(12_000, 897.32);
+checar("IRRF de quem ganha acima da faixa", irrfAlto.irrf > 0, true);
+checar(
+  "IRRF entra proporcionalmente na transição",
+  calcularIRRF(6_175, 679.25).irrf < calcularIRRF(7_400, 814).irrf,
+  true
+);
+
+// --- Rateio completo: contas, pró-labore e lucro ---
+import { calcularMes, ESTADO_INICIAL, type Estado } from "../src/lib/calculo.ts";
+import { exportarCSV, importarCSV } from "../src/lib/planilha.ts";
+
+const mes: Estado = {
+  ...ESTADO_INICIAL,
+  competencia: "2026-08",
+  anexo: "III",
+  usarFatorR: false,
+  rbt12: 150_000,
+  fonteDAS: "boleto",
+  divisaoLucro: "quotas",
+  socios: [
+    { ...ESTADO_INICIAL.socios[0], nome: "A", faturamento: 12_000, proLabore: 3_242, quotas: 50 },
+    { ...ESTADO_INICIAL.socios[1], nome: "B", faturamento: 10_314, proLabore: 0, quotas: 50 },
+  ],
+  contas: [
+    {
+      id: "1", nome: "DAS", categoria: "DAS", valor: 1_338.84, vencimento: "2026-09-21",
+      divisao: "proporcional", linhaDigitavel: null, origem: "manual",
+    },
+    {
+      id: "2", nome: "INSS pró-labore", categoria: "GPS/INSS", valor: 356.62,
+      vencimento: "2026-09-18", divisao: "socio1", linhaDigitavel: null, origem: "manual",
+    },
+    {
+      id: "3", nome: "Contabilidade", categoria: "Contabilidade", valor: 300,
+      vencimento: "2026-09-10", divisao: "igual", linhaDigitavel: null, origem: "manual",
+    },
+  ],
+};
+
+const m = calcularMes(mes);
+checar("total a pagar no mês", Number(m.totalGeral.toFixed(2)), 1_995.46);
+// 22.314 − 1.338,84 (DAS) − 300 (contabilidade) − 3.242 (pró-labore bruto).
+// A guia de INSS não entra de novo: já está dentro do pró-labore bruto.
+checar("lucro distribuível", Number(m.lucroDistribuivel.toFixed(2)), 17_433.16);
+checar("lucro dividido pelas quotas", Number(m.socios[0].lucro.toFixed(2)), 8_716.58);
+checar(
+  "retirada do sócio com pró-labore",
+  Number(m.socios[0].retirada.toFixed(2)),
+  Number((3242 - 356.62 + 8716.58).toFixed(2))
+);
+checar("retirada do sócio sem pró-labore", Number(m.socios[1].retirada.toFixed(2)), 8_716.58);
+checar(
+  "a guia de INSS não é descontada duas vezes",
+  Number((m.totalFaturamento - m.despesasDoLucro).toFixed(2)),
+  Number(m.lucroDistribuivel.toFixed(2))
+);
+
+// --- Planilha: exportar e importar de volta ---
+const csv = exportarCSV(mes, m);
+const volta = importarCSV(csv, ESTADO_INICIAL);
+checar("importou as 3 contas", volta.contasLidas, 3);
+checar("importou os 2 sócios", volta.sociosLidos, 2);
+checar("sem avisos na importação", volta.avisos, []);
+checar("faturamento voltou igual", volta.estado.socios[0].faturamento, 12_000);
+checar("pró-labore voltou igual", volta.estado.socios[0].proLabore, 3_242);
+checar("anexo voltou igual", volta.estado.anexo, "III");
+checar("divisão do lucro voltou igual", volta.estado.divisaoLucro, "quotas");
+checar("vencimento voltou igual", volta.estado.contas[0].vencimento, "2026-09-21");
+checar("quem paga voltou igual", volta.estado.contas[1].divisao, "socio1");
+const mVolta = calcularMes(volta.estado);
+checar(
+  "o mês recalculado bate com o original",
+  Number(mVolta.lucroDistribuivel.toFixed(2)),
+  Number(m.lucroDistribuivel.toFixed(2))
+);
+
 console.log(falhas === 0 ? "\nTudo certo." : `\n${falhas} falha(s).`);
 process.exit(falhas === 0 ? 0 : 1);

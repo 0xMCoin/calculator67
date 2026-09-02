@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Card,
   Campo,
@@ -16,12 +16,15 @@ import { UploadBoletos } from "@/components/UploadBoletos";
 import {
   calcularMes,
   ESTADO_INICIAL,
+  migrarEstado,
   ROTULOS_DIVISAO,
   type Conta,
   type Divisao,
   type Estado,
 } from "@/lib/calculo";
 import { ANEXOS, type AnexoId } from "@/lib/simples";
+import { ISENCAO_INTEGRAL } from "@/lib/irrf";
+import { baixarCSV, exportarCSV, importarCSV, MODELO_CSV } from "@/lib/planilha";
 import { dataBR, diasAte, moeda, pct } from "@/lib/format";
 import { formatarLinhaDigitavel, type TipoDocumento } from "@/lib/boleto";
 
@@ -48,9 +51,12 @@ function novoId() {
 export default function Home() {
   const [estado, setEstado, carregado] = useEstadoLocal<Estado>(
     "calculadora-empresa-v1",
-    ESTADO_INICIAL
+    ESTADO_INICIAL,
+    migrarEstado
   );
   const [copiado, setCopiado] = useState(false);
+  const [avisoImport, setAvisoImport] = useState<string | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   const r = calcularMes(estado);
 
@@ -67,14 +73,11 @@ export default function Home() {
   }
 
   function adicionarContas(contas: Conta[]) {
-    setEstado((e) => {
-      const temDAS = contas.some((c) => c.categoria === "DAS");
-      return {
-        ...e,
-        contas: [...e.contas, ...contas],
-        fonteDAS: temDAS ? "boleto" : e.fonteDAS,
-      };
-    });
+    setEstado((e) => ({
+      ...e,
+      contas: [...e.contas, ...contas],
+      fonteDAS: contas.some((c) => c.categoria === "DAS") ? "boleto" : e.fonteDAS,
+    }));
   }
 
   function atualizarConta(id: string, patch: Partial<Conta>) {
@@ -111,19 +114,43 @@ export default function Home() {
     ]);
   }
 
+  async function importarPlanilha(arquivo: File) {
+    try {
+      const texto = await arquivo.text();
+      const res = importarCSV(texto, estado);
+      setEstado(res.estado);
+      const partes = [
+        `${res.contasLidas} conta(s)`,
+        res.sociosLidos > 0 ? `${res.sociosLidos} sócio(s)` : "",
+      ].filter(Boolean);
+      setAvisoImport(
+        res.avisos.length > 0
+          ? res.avisos.join(" ")
+          : `Importei ${partes.join(" e ")} de ${arquivo.name}.`
+      );
+    } catch (e) {
+      setAvisoImport(`Não consegui ler a planilha: ${(e as Error).message}`);
+    }
+    if (importRef.current) importRef.current.value = "";
+  }
+
   function copiarResumo() {
     const linhas = [
       `Contas da empresa — ${estado.competencia}`,
       `Faturamento total: ${moeda(r.totalFaturamento)}`,
-      `DAS (${estado.fonteDAS === "boleto" ? "boleto" : `calculado, ${pct(r.das.aliquotaEfetiva)}`}): ${moeda(r.dasValor)}`,
+      `DAS: ${moeda(r.dasValor)}`,
       ...r.outrasContas.map((c) => `${c.nome}: ${moeda(c.valor)}`),
-      r.totalINSS > 0 ? `INSS pró-labore: ${moeda(r.totalINSS)}` : "",
-      `TOTAL DO MÊS: ${moeda(r.totalGeral)}`,
+      `TOTAL A PAGAR: ${moeda(r.totalGeral)}`,
+      "",
+      `Pró-labore bruto: ${moeda(r.proLaboreBruto)}`,
+      `Lucro distribuível: ${moeda(r.lucroDistribuivel)} (margem de ${pct(r.margem, 1)})`,
       "",
       ...r.socios.flatMap((s) => [
         `${s.nome} — faturou ${moeda(s.faturamento)} (${pct(s.participacao * 100, 1)})`,
-        ...s.itens.map((i) => `   ${i.rotulo}: ${moeda(i.valor)}`),
-        `   TOTAL A PAGAR: ${moeda(s.total)} · sobra ${moeda(s.liquido)}`,
+        `   Contas sob responsabilidade dele: ${moeda(s.total)}`,
+        `   Pró-labore líquido: ${moeda(s.proLabore.liquido)}`,
+        `   Lucro: ${moeda(s.lucro)}`,
+        `   RETIRADA TOTAL: ${moeda(s.retirada)}`,
         "",
       ]),
     ].filter(Boolean);
@@ -132,16 +159,17 @@ export default function Home() {
     setTimeout(() => setCopiado(false), 2000);
   }
 
-  if (!carregado) {
-    return <div className="min-h-screen bg-slate-950" />;
-  }
+  if (!carregado) return <div className="min-h-screen bg-slate-950" />;
 
   const anexoInfo = ANEXOS[r.das.anexoAplicado];
-  // Quando o DAS vem do boleto, a própria guia traz o valor de cada tributo.
   const composicaoReal =
     estado.fonteDAS === "boleto" && r.dasBoleto?.composicao?.length
       ? [...r.dasBoleto.composicao].sort((a, b) => b.valor - a.valor)
       : null;
+  const folhaSugerida = r.proLaboreBruto * 12;
+
+  const botao =
+    "rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-800";
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-12">
@@ -151,11 +179,10 @@ export default function Home() {
             Calculadora de contas da empresa
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            DAS do Simples Nacional, contabilidade e demais boletos — com o rateio entre os dois
-            sócios.
+            DAS, contabilidade e boletos, pró-labore e divisão de lucros entre os dois sócios.
           </p>
         </div>
-        <div className="flex items-end gap-3">
+        <div className="flex flex-wrap items-end gap-3">
           <Campo label="Competência">
             <InputTexto
               tipo="month"
@@ -163,15 +190,41 @@ export default function Home() {
               onChange={(v) => atualizar({ competencia: v })}
             />
           </Campo>
-          <button
-            type="button"
-            onClick={copiarResumo}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
-          >
+          <button type="button" onClick={copiarResumo} className={botao}>
             {copiado ? "Copiado!" : "Copiar resumo"}
           </button>
+          <button
+            type="button"
+            onClick={() => baixarCSV(`contas-${estado.competencia}.csv`, exportarCSV(estado, r))}
+            className={botao}
+          >
+            Exportar planilha
+          </button>
+          <button type="button" onClick={() => importRef.current?.click()} className={botao}>
+            Importar planilha
+          </button>
+          <input
+            ref={importRef}
+            type="file"
+            accept=".csv,text/csv"
+            hidden
+            onChange={(e) => e.target.files?.[0] && void importarPlanilha(e.target.files[0])}
+          />
         </div>
       </header>
+
+      {avisoImport && (
+        <p className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+          {avisoImport}
+          <button
+            type="button"
+            onClick={() => baixarCSV("modelo-contas.csv", MODELO_CSV)}
+            className="shrink-0 text-xs text-emerald-400 underline-offset-2 hover:underline"
+          >
+            baixar modelo
+          </button>
+        </p>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1.05fr_1fr]">
         <div className="space-y-6">
@@ -198,17 +251,17 @@ export default function Home() {
                         onChange={(v) => atualizarSocio(i, { faturamento: v })}
                       />
                     </Campo>
-                    {estado.cobrarINSS && (
-                      <Campo label="Pró-labore">
-                        <InputMoeda
-                          valor={socio.proLabore}
-                          onChange={(v) => atualizarSocio(i, { proLabore: v })}
-                        />
-                      </Campo>
-                    )}
+                    <Campo label="Quotas no contrato social (%)">
+                      <InputTexto
+                        valor={String(socio.quotas)}
+                        onChange={(v) =>
+                          atualizarSocio(i, { quotas: Number(v.replace(",", ".")) || 0 })
+                        }
+                      />
+                    </Campo>
                     <p className="text-xs text-slate-500">
                       Participação no faturamento:{" "}
-                      <span className="text-slate-300">{pct(r.participacao[i] * 100, 1)}</span>
+                      <span className="text-slate-300">{pct(r.pesos.proporcional[i] * 100, 1)}</span>
                     </p>
                   </div>
                 );
@@ -222,10 +275,7 @@ export default function Home() {
             </div>
           </Card>
 
-          <Card
-            titulo="Simples Nacional"
-            descricao="Dados da empresa que definem a alíquota do DAS."
-          >
+          <Card titulo="Simples Nacional" descricao="O que define a alíquota do DAS.">
             <div className="grid gap-4 sm:grid-cols-2">
               <Campo label="Anexo" dica={ANEXOS[estado.anexo].descricao}>
                 <Select<AnexoId>
@@ -264,6 +314,15 @@ export default function Home() {
                   <InputMoeda valor={estado.folha12} onChange={(v) => atualizar({ folha12: v })} />
                 </Campo>
               )}
+              {estado.usarFatorR && folhaSugerida > 0 && estado.folha12 !== folhaSugerida && (
+                <button
+                  type="button"
+                  onClick={() => atualizar({ folha12: folhaSugerida })}
+                  className="text-xs text-emerald-400 underline-offset-2 hover:underline"
+                >
+                  usar {moeda(folhaSugerida)} (o pró-labore de hoje × 12)
+                </button>
+              )}
               <Campo label="Como dividir o DAS entre os sócios">
                 <Select<Divisao>
                   valor={estado.divisaoDAS}
@@ -271,17 +330,91 @@ export default function Home() {
                   opcoes={OPCOES_DIVISAO}
                 />
               </Campo>
-              <Switch
-                ligado={estado.cobrarINSS}
-                onChange={(v) => atualizar({ cobrarINSS: v })}
-                label="Descontar INSS de 11% sobre o pró-labore de cada sócio"
-                dica={`Limitado ao teto de ${moeda(estado.tetoINSS)}.`}
-              />
-              {estado.cobrarINSS && (
-                <Campo label="Teto do INSS" dica="Atualize quando o teto mudar no ano.">
-                  <InputMoeda valor={estado.tetoINSS} onChange={(v) => atualizar({ tetoINSS: v })} />
-                </Campo>
-              )}
+            </div>
+          </Card>
+
+          <Card
+            titulo="Pró-labore e lucros"
+            descricao="Pró-labore é salário do sócio: tem INSS e IRRF. O que sobra depois de tudo é lucro, e sai isento."
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              {estado.socios.map((socio, indice) => {
+                const i = indice as 0 | 1;
+                const p = r.socios[i].proLabore;
+                return (
+                  <div
+                    key={i}
+                    className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/40 p-4"
+                  >
+                    <h3 className="text-sm font-medium text-slate-200">{socio.nome}</h3>
+                    <Campo label="Pró-labore bruto">
+                      <InputMoeda
+                        valor={socio.proLabore}
+                        onChange={(v) => atualizarSocio(i, { proLabore: v })}
+                      />
+                    </Campo>
+                    <Campo label="Dependentes">
+                      <InputTexto
+                        valor={String(socio.dependentes)}
+                        onChange={(v) =>
+                          atualizarSocio(i, { dependentes: Math.max(0, parseInt(v) || 0) })
+                        }
+                      />
+                    </Campo>
+                    {socio.proLabore > 0 && (
+                      <div className="space-y-1 border-t border-slate-800 pt-2 text-xs">
+                        <div className="flex justify-between text-slate-400">
+                          <span>INSS (11%)</span>
+                          <span className="tabular-nums">−{moeda(p.inss)}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>
+                            IRRF{" "}
+                            {socio.irrfManual !== null ? (
+                              <span className="text-sky-400">manual</span>
+                            ) : p.irrf.faixaIsenta ? (
+                              <span className="text-emerald-400">isento</span>
+                            ) : (
+                              <span className="text-slate-500">{pct(p.irrf.aliquota, 1)}</span>
+                            )}
+                          </span>
+                          <span className="tabular-nums">−{moeda(p.irrfAplicado)}</span>
+                        </div>
+                        <div className="flex justify-between font-medium text-slate-200">
+                          <span>Líquido para o sócio</span>
+                          <span className="tabular-nums">{moeda(p.liquido)}</span>
+                        </div>
+                        <Campo label="IRRF da folha (opcional)">
+                          <InputMoeda
+                            valor={socio.irrfManual ?? 0}
+                            onChange={(v) => atualizarSocio(i, { irrfManual: v > 0 ? v : null })}
+                          />
+                        </Campo>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <Campo
+                label="Como dividir o lucro"
+                dica="O padrão legal é pelas quotas do contrato social; o contrato pode prever divisão diferente."
+              >
+                <Select<Divisao>
+                  valor={estado.divisaoLucro}
+                  onChange={(v) => atualizar({ divisaoLucro: v })}
+                  opcoes={OPCOES_DIVISAO}
+                />
+              </Campo>
+              <Campo label="Teto do INSS" dica="Muda todo ano — atualize quando mudar.">
+                <InputMoeda valor={estado.tetoINSS} onChange={(v) => atualizar({ tetoINSS: v })} />
+              </Campo>
+              <p className="text-xs text-slate-500">
+                O IRRF é estimado pela tabela progressiva com a isenção de {moeda(ISENCAO_INTEGRAL)}
+                . Se a folha trouxer outro valor, preencha o campo &quot;IRRF da folha&quot;.
+              </p>
             </div>
           </Card>
 
@@ -398,14 +531,18 @@ export default function Home() {
           </Card>
         </div>
 
-        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
-          <Card titulo="Total do mês" descricao="Tudo que a empresa precisa pagar na competência.">
+        <div className="space-y-6">
+          <Card titulo="A pagar no mês" descricao="Boletos e guias da competência.">
             <Linha rotulo="DAS — Simples Nacional" valor={r.dasValor} />
             {r.outrasContas.map((c) => (
               <Linha key={c.id} rotulo={c.nome} valor={c.valor} />
             ))}
-            {r.totalINSS > 0 && <Linha rotulo="INSS sobre pró-labore" valor={r.totalINSS} />}
             <Linha rotulo="Total" valor={r.totalGeral} forte />
+            {r.totalFaturamento > 0 && (
+              <p className="mt-3 text-xs text-slate-500">
+                {pct(r.cargaSobreFaturamento, 1)} do faturamento do mês.
+              </p>
+            )}
             {r.avisos.map((a, i) => (
               <p
                 key={i}
@@ -414,33 +551,71 @@ export default function Home() {
                 {a}
               </p>
             ))}
+          </Card>
+
+          <Card
+            titulo="Quanto sobra para vocês"
+            descricao="Faturamento menos impostos, contas e pró-labore."
+          >
+            <Linha rotulo="Faturamento" valor={r.totalFaturamento} />
+            <Linha rotulo="(−) DAS" valor={-r.dasValor} />
+            <Linha
+              rotulo="(−) Outras contas"
+              valor={-(r.despesasDoLucro - r.dasValor - r.proLaboreBruto)}
+            />
+            <Linha rotulo="(−) Pró-labore bruto" valor={-r.proLaboreBruto} />
+            <Linha rotulo="= Lucro distribuível" valor={r.lucroDistribuivel} forte />
             {r.totalFaturamento > 0 && (
               <p className="mt-3 text-xs text-slate-500">
-                Isso é{" "}
-                <span className="font-medium text-slate-300">
-                  {pct(r.cargaSobreFaturamento, 1)}
-                </span>{" "}
-                do faturamento do mês. Sobram {moeda(r.totalFaturamento - r.totalGeral)} para os
-                sócios.
+                Margem de <span className="text-slate-300">{pct(r.margem, 1)}</span>. Somando o
+                pró-labore líquido, os sócios levam{" "}
+                <span className="text-emerald-300">
+                  {moeda(r.socios[0].retirada + r.socios[1].retirada)}
+                </span>
+                .
               </p>
             )}
+            <p className="mt-2 text-xs text-slate-500">
+              Lucro distribuído é isento de IR para o sócio quando a empresa tem escrituração
+              contábil regular. Confirme com a contabilidade antes de distribuir.
+            </p>
           </Card>
 
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
             {r.socios.map((s, i) => (
               <Card key={i} titulo={s.nome} descricao={`Faturou ${moeda(s.faturamento)}`}>
-                {s.itens.length === 0 && (
-                  <p className="text-sm text-slate-500">Nada a pagar neste mês.</p>
-                )}
+                <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Paga
+                </h3>
                 {s.itens.map((item, j) => (
                   <Linha key={j} rotulo={item.rotulo} valor={item.valor} detalhe={item.detalhe} />
                 ))}
                 <Linha rotulo="Total a pagar" valor={s.total} forte />
+
+                <h3 className="mb-1 mt-5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Recebe
+                </h3>
+                {s.proLabore.bruto > 0 && (
+                  <Linha
+                    rotulo="Pró-labore líquido"
+                    valor={s.proLabore.liquido}
+                    detalhe={`bruto ${moeda(s.proLabore.bruto)}`}
+                  />
+                )}
+                <Linha
+                  rotulo="Lucro distribuído"
+                  valor={s.lucro}
+                  detalhe={
+                    estado.divisaoLucro === "quotas"
+                      ? `${s.quotas}% das quotas`
+                      : ROTULOS_DIVISAO[estado.divisaoLucro]
+                  }
+                />
                 <div className="mt-3 rounded-lg bg-emerald-950/40 px-3 py-2">
                   <div className="flex items-baseline justify-between">
-                    <span className="text-xs text-emerald-300/80">Sobra para o sócio</span>
+                    <span className="text-xs text-emerald-300/80">Retirada total</span>
                     <span className="tabular-nums text-sm font-semibold text-emerald-300">
-                      {moeda(s.liquido)}
+                      {moeda(s.retirada)}
                     </span>
                   </div>
                 </div>
@@ -503,10 +678,10 @@ export default function Home() {
 
             {r.dasBoleto && Math.abs(r.dasBoleto.valor - r.das.das) > 0.01 && (
               <p className="mt-3 rounded-lg border border-amber-900/60 bg-amber-950/30 p-3 text-xs text-amber-300">
-                O boleto do DAS veio {moeda(r.dasBoleto.valor)} e o cálculo deu{" "}
-                {moeda(r.das.das)} — diferença de {moeda(Math.abs(r.dasBoleto.valor - r.das.das))}.
-                Costuma ser receita de outra competência, multa/juros ou retenções. Estou usando o
-                valor {estado.fonteDAS === "boleto" ? "do boleto" : "calculado"}.
+                O boleto do DAS veio {moeda(r.dasBoleto.valor)} e o cálculo deu {moeda(r.das.das)} —
+                diferença de {moeda(Math.abs(r.dasBoleto.valor - r.das.das))}. Costuma ser receita de
+                outra competência, multa/juros ou retenções. Estou usando o valor{" "}
+                {estado.fonteDAS === "boleto" ? "do boleto" : "calculado"}.
               </p>
             )}
 
@@ -541,24 +716,24 @@ export default function Home() {
                 ))}
                 {!composicaoReal &&
                   r.das.tributos.map((t) => (
-                  <div key={t.nome} className="flex items-center gap-3 text-xs">
-                    <span className="w-14 shrink-0 text-slate-300">{t.nome}</span>
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
-                      <div
-                        className="h-full rounded-full bg-emerald-500/70"
-                        style={{
-                          width: `${(t.percentual / r.das.tributos[0].percentual) * 100}%`,
-                        }}
-                      />
+                    <div key={t.nome} className="flex items-center gap-3 text-xs">
+                      <span className="w-14 shrink-0 text-slate-300">{t.nome}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-500/70"
+                          style={{
+                            width: `${(t.percentual / r.das.tributos[0].percentual) * 100}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="w-12 shrink-0 text-right tabular-nums text-slate-500">
+                        {pct(t.percentual, 1)}
+                      </span>
+                      <span className="w-24 shrink-0 text-right tabular-nums text-slate-300">
+                        {moeda(r.dasValor * (t.percentual / 100))}
+                      </span>
                     </div>
-                    <span className="w-12 shrink-0 text-right tabular-nums text-slate-500">
-                      {pct(t.percentual, 1)}
-                    </span>
-                    <span className="w-24 shrink-0 text-right tabular-nums text-slate-300">
-                      {moeda(r.dasValor * (t.percentual / 100))}
-                    </span>
-                  </div>
-                ))}
+                  ))}
               </div>
             </div>
 
@@ -621,9 +796,9 @@ export default function Home() {
 
       <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6 text-xs text-slate-500">
         <p className="max-w-2xl">
-          Cálculo baseado nas tabelas dos Anexos I a V da LC 123/2006. É uma ferramenta de apoio
-          para a divisão entre os sócios — o valor oficial é sempre o do DAS gerado no PGDAS-D.
-          Tudo fica salvo só no seu navegador.
+          Cálculo baseado nos Anexos I a V da LC 123/2006 e na tabela do IRRF. É uma ferramenta de
+          apoio para a divisão entre os sócios — o valor oficial é sempre o do DAS gerado no PGDAS-D
+          e o da folha feita pela contabilidade. Tudo fica salvo só no seu navegador.
         </p>
         <button
           type="button"
