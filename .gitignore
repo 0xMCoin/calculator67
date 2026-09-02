@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# arquivos de teste gerados
+.tmp-*.pdf
+
+# gerado pelo prebuild (npm run prebuild)
+/public/pdf.worker.min.mjs
