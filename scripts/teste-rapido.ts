@@ -195,6 +195,53 @@ checar(
   Number(m.lucroDistribuivel.toFixed(2))
 );
 
+// --- Pró-labore deduzido automaticamente da guia de INSS ---
+import { inferirProLabore, extrairComposicao } from "../src/lib/boleto.ts";
+
+const textoDARF = `Documento de Arrecadacao de Receitas Federais
+Periodo de Apuracao: 08/2026
+Composicao do Documento de Arrecadacao
+1099   CP   DESCONTADA SEGURADO - CONTRIB INDIVIDUAL   356,62   356,62
+01   CP   SEGURADOS - CONTRIBUINTES INDIVIDUAIS - 11%
+Totais   356,62   356,62`;
+const composicaoDARF = extrairComposicao(textoDARF);
+checar("leu a composição do DARF", composicaoDARF.length, 1);
+checar(
+  "pró-labore deduzido do INSS da guia",
+  Number(inferirProLabore(textoDARF, composicaoDARF)!.toFixed(2)),
+  3_242
+);
+checar(
+  "guia sem INSS de sócio não vira pró-labore",
+  inferirProLabore("Valor Total 300,00", []),
+  null
+);
+
+const semDigitar: Estado = {
+  ...mes,
+  socios: [
+    { ...mes.socios[0], proLabore: 0 },
+    { ...mes.socios[1], proLabore: 0 },
+  ],
+  contas: mes.contas.map((c) =>
+    c.categoria === "GPS/INSS" ? { ...c, divisao: "socio1", proLaboreInferido: 3_242 } : c
+  ),
+};
+const auto = calcularMes(semDigitar);
+checar("pró-labore veio da guia", auto.socios[0].proLabore.origem, "guia");
+checar("valor do pró-labore automático", Number(auto.socios[0].proLabore.bruto.toFixed(2)), 3_242);
+checar(
+  "INSS recalculado bate com a guia",
+  Number(auto.socios[0].proLabore.inss.toFixed(2)),
+  356.62
+);
+checar("sócio sem guia fica sem pró-labore", auto.socios[1].proLabore.bruto, 0);
+checar(
+  "lucro é o mesmo de quando o valor era digitado",
+  Number(auto.lucroDistribuivel.toFixed(2)),
+  Number(m.lucroDistribuivel.toFixed(2))
+);
+
 // --- Planilha: exportar e importar de volta ---
 const csv = exportarCSV(mes, m);
 const volta = importarCSV(csv, ESTADO_INICIAL);

@@ -83,6 +83,7 @@ export function UploadBoletos({ onAdicionar }: { onAdicionar: (contas: Conta[]) 
           competencia: dados.competencia,
           beneficiario: dados.beneficiario,
           composicao: dados.composicao,
+          proLaboreInferido: dados.proLaboreInferido,
           avisos: dados.avisos,
         });
         resultados.push({

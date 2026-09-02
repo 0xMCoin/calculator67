@@ -346,11 +346,28 @@ export default function Home() {
                     key={i}
                     className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/40 p-4"
                   >
-                    <h3 className="text-sm font-medium text-slate-200">{socio.nome}</h3>
-                    <Campo label="Pró-labore bruto">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-medium text-slate-200">{socio.nome}</h3>
+                      {p.origem === "guia" && <Etiqueta tom="sky">calculado da guia</Etiqueta>}
+                    </div>
+                    <Campo
+                      label="Pró-labore bruto"
+                      dica={
+                        p.origem === "guia"
+                          ? `${moeda(p.inss)} de INSS na guia ÷ 11% = ${moeda(p.bruto)}. Digite aqui só se quiser sobrescrever.`
+                          : p.inferido > 0 && Math.abs(p.inferido - p.bruto) > 0.01
+                            ? `A guia de INSS aponta ${moeda(p.inferido)}.`
+                            : undefined
+                      }
+                    >
                       <InputMoeda
                         valor={socio.proLabore}
                         onChange={(v) => atualizarSocio(i, { proLabore: v })}
+                        placeholder={
+                          p.origem === "guia"
+                            ? p.bruto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })
+                            : "0,00"
+                        }
                       />
                     </Campo>
                     <Campo label="Dependentes">
@@ -361,7 +378,7 @@ export default function Home() {
                         }
                       />
                     </Campo>
-                    {socio.proLabore > 0 && (
+                    {p.bruto > 0 && (
                       <div className="space-y-1 border-t border-slate-800 pt-2 text-xs">
                         <div className="flex justify-between text-slate-400">
                           <span>INSS (11%)</span>

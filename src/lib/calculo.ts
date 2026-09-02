@@ -1,4 +1,4 @@
-import type { ItemComposicao, TipoDocumento } from "./boleto.ts";
+import { ehINSSdeProLabore, type ItemComposicao, type TipoDocumento } from "./boleto.ts";
 import { calcularIRRF, type ResultadoIRRF } from "./irrf.ts";
 import { calcularDAS, inssProLabore, type AnexoId, type ResultadoDAS } from "./simples.ts";
 
@@ -26,6 +26,7 @@ export interface Conta {
   competencia?: string | null;
   beneficiario?: string | null;
   composicao?: ItemComposicao[];
+  proLaboreInferido?: number | null;
   avisos?: string[];
 }
 
@@ -124,6 +125,8 @@ export interface ItemSocio {
 
 export interface ProLaboreSocio {
   bruto: number;
+  origem: "manual" | "guia"; // digitado por você ou deduzido da guia de INSS
+  inferido: number; // o que a guia de INSS indica, mesmo quando há valor manual
   inss: number;
   irrf: ResultadoIRRF;
   irrfAplicado: number;
@@ -197,13 +200,29 @@ export function calcularMes(estado: Estado): ResultadoMes {
   const totalOutrasContas = outrasContas.reduce((s, c) => s + c.valor, 0);
 
   // --- Pró-labore de cada sócio ---
-  const proLabores = estado.socios.map((socio) => {
-    const bruto = Math.max(0, socio.proLabore);
+  // A guia de INSS diz quanto foi o pró-labore: R$ 356,62 a 11% = R$ 3.242,00.
+  // Quem recebe é definido pelo "quem paga" da própria guia.
+  const guiasINSSproLabore = outrasContas.filter(pareceINSSdeProLabore);
+  const inferido: [number, number] = [0, 0];
+  for (const conta of guiasINSSproLabore) {
+    const bruto = conta.proLaboreInferido ?? conta.valor / 0.11;
+    inferido[0] += parcela(bruto, conta.divisao, 0, pesos);
+    inferido[1] += parcela(bruto, conta.divisao, 1, pesos);
+  }
+
+  const proLabores = estado.socios.map((socio, indice) => {
+    const i = indice as 0 | 1;
+    const manual = Math.max(0, socio.proLabore);
+    const bruto = manual > 0 ? manual : inferido[i];
+    const origem: ProLaboreSocio["origem"] =
+      manual > 0 ? "manual" : inferido[i] > 0 ? "guia" : "manual";
     const inss = inssProLabore(bruto, estado.tetoINSS);
     const irrf = calcularIRRF(bruto, inss, socio.dependentes);
     const irrfAplicado = socio.irrfManual ?? irrf.irrf;
     return {
       bruto,
+      origem,
+      inferido: inferido[i],
       inss,
       irrf,
       irrfAplicado,
@@ -218,7 +237,6 @@ export function calcularMes(estado: Estado): ResultadoMes {
   // --- Lucro distribuível ---
   // O pró-labore bruto já inclui o INSS retido, então a guia desse INSS não pode
   // ser descontada de novo quando o pró-labore está sendo contado.
-  const guiasINSSproLabore = outrasContas.filter(pareceINSSdeProLabore);
   const totalGuiasINSS = guiasINSSproLabore.reduce((s, c) => s + c.valor, 0);
   const despesasDoLucro =
     dasValor + totalOutrasContas - (proLaboreBruto > 0 ? totalGuiasINSS : 0) + proLaboreBruto;

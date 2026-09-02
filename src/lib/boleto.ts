@@ -23,6 +23,7 @@ export interface DadosBoleto {
   cnpj: string | null;
   beneficiario: string | null;
   composicao: ItemComposicao[]; // tributos impressos na própria guia
+  proLaboreInferido: number | null; // deduzido do INSS de contribuinte individual
   avisos: string[];
 }
 
@@ -343,6 +344,31 @@ export interface ItemComposicao {
   valor: number;
 }
 
+/** Reconhece a contribuição previdenciária descontada do sócio (contribuinte individual). */
+export function ehINSSdeProLabore(denominacao: string): boolean {
+  return /contrib(\.|uinte)?s?\s*individual|segurado/i.test(denominacao);
+}
+
+/**
+ * O INSS do pró-labore é uma alíquota fixa sobre ele, então dá para voltar ao
+ * bruto: R$ 356,62 a 11% significa um pró-labore de R$ 3.242,00.
+ */
+export function inferirProLabore(texto: string, composicao: ItemComposicao[]): number | null {
+  const inss = composicao
+    .filter((i) => ehINSSdeProLabore(i.denominacao))
+    .reduce((s, i) => s + i.valor, 0);
+  if (inss <= 0) return null;
+
+  // A guia costuma imprimir a alíquota: "CONTRIBUINTES INDIVIDUAIS - 11%".
+  const naGuia = texto.match(
+    /(?:contrib(?:\.|uinte)?s?\s*individuais?|segurados?)[^%\n]{0,40}?(\d{1,2}(?:,\d+)?)\s*%/i
+  );
+  const aliquota = naGuia ? Number(naGuia[1].replace(",", ".")) : 11;
+  if (!Number.isFinite(aliquota) || aliquota <= 0 || aliquota > 31) return null;
+
+  return inss / (aliquota / 100);
+}
+
 /**
  * Lê a tabela "Composição do Documento de Arrecadação" das guias federais
  * (DAS e DARF), que traz o valor real de cada tributo.
@@ -403,6 +429,7 @@ export function extrairDadosDoTexto(texto: string): DadosBoleto {
     cnpj: texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/)?.[0] ?? null,
     beneficiario: acharBeneficiario(texto, formato),
     composicao,
+    proLaboreInferido: inferirProLabore(texto, composicao),
     avisos: [...avisos, ...(codigo?.avisos ?? [])],
   };
 }
